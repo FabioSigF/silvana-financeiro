@@ -416,9 +416,9 @@ export async function preprocessImage(
   }
 
   // Exporta resultado
-  const previewUrl = canvas.toDataURL("image/png");
+  const previewUrl = canvas.toDataURL("image/jpeg", 0.85);
   const blob = await new Promise<Blob>((res) =>
-    canvas.toBlob((b) => res(b!), "image/png")
+    canvas.toBlob((b) => res(b!), "image/jpeg", 0.85)
   );
 
   return {
