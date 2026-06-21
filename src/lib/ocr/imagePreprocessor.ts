@@ -369,9 +369,28 @@ export async function preprocessImage(
   const origW = img.naturalWidth;
   const origH = img.naturalHeight;
 
-  // 2. Upscale — aumenta DPI virtual
-  const W = origW * upscaleFactor;
-  const H = origH * upscaleFactor;
+  // 2. Upscale condicional ou Downscale para limite do payload da Vercel (máx 4.5MB)
+  let W = origW;
+  let H = origH;
+
+  if (origW < 1500 && origH < 1500) {
+    // Se a imagem for pequena, faz upscale para melhorar leitura
+    W = origW * upscaleFactor;
+    H = origH * upscaleFactor;
+  } else {
+    // Se for gigante (celulares modernos), redimensiona proporcionalmente para no máximo 2500px
+    const maxDimension = 2500;
+    if (origW > maxDimension || origH > maxDimension) {
+      const ratio = origW / origH;
+      if (origW > origH) {
+        W = maxDimension;
+        H = Math.round(maxDimension / ratio);
+      } else {
+        H = maxDimension;
+        W = Math.round(maxDimension * ratio);
+      }
+    }
+  }
 
   let { canvas, ctx } = createCanvas(W, H);
   ctx.fillStyle = "#ffffff";
