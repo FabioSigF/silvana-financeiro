@@ -43,6 +43,15 @@ export function normalizeDate(raw: string): string {
     return `${year}-${month}-${day}`;
   }
 
+  // Tenta YYYY/MM/DD (ISO)
+  const isoMatch = cleaned.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (isoMatch) {
+    const year = isoMatch[1];
+    const month = isoMatch[2].padStart(2, "0");
+    const day = isoMatch[3].padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
   // Tenta DD/MM (sem ano)
   const shortMatch = cleaned.match(/^(\d{1,2})\/(\d{1,2})$/);
   if (shortMatch) {
