@@ -13,6 +13,7 @@ import {
   type OCRProgressState,
 } from "@/lib/ocr/pipeline";
 import { useMovements } from "@/hooks/useMovements";
+import { GeminiError } from "@/lib/gemini/types";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -158,6 +159,8 @@ const PHASE_LABELS: Record<OCRProgressState["phase"], string> = {
   preprocessing: "Processando imagem...",
   ocr_loading: "Carregando motor OCR...",
   ocr_reading: "Extraindo texto...",
+  gemini_reading: "Gemini Vision analisando...",
+  validating: "Validando dados...",
   parsing: "Organizando dados...",
   done: "Leitura concluída!",
   error: "Erro no processamento",
@@ -169,6 +172,8 @@ function OCRProgressCard({ state }: { state: OCRProgressState }) {
     preprocessing: <FileImage className="w-5 h-5 text-blue-500" />,
     ocr_loading: <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />,
     ocr_reading: <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />,
+    gemini_reading: <Sparkles className="w-5 h-5 text-purple-500 animate-pulse" />,
+    validating: <CheckCircle className="w-5 h-5 text-blue-500" />,
     parsing: <Sparkles className="w-5 h-5 text-blue-500" />,
     done: <CheckCircle className="w-5 h-5 text-emerald-500" />,
     error: <AlertTriangle className="w-5 h-5 text-red-500" />,
@@ -176,12 +181,12 @@ function OCRProgressCard({ state }: { state: OCRProgressState }) {
 
   const steps = [
     { phase: "preprocessing", label: "Imagem" },
-    { phase: "ocr_loading", label: "Motor" },
-    { phase: "ocr_reading", label: "Leitura" },
-    { phase: "parsing", label: "Parsing" },
+    { phase: "gemini_reading", label: "Gemini" },
+    { phase: "validating", label: "Validação" },
+    { phase: "done", label: "Concluído" },
   ];
 
-  const stepOrder = ["preprocessing", "ocr_loading", "ocr_reading", "parsing", "done"];
+  const stepOrder = ["preprocessing", "gemini_reading", "validating", "done"];
   const currentIndex = stepOrder.indexOf(state.phase);
 
   return (
@@ -263,6 +268,9 @@ export default function UploadsPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  // Trava síncrona para impedir múltiplos disparos simultâneos
+  // (useRef não causa re-render — é imediato, diferente de useState)
+  const isRunningRef = useRef(false);
 
   // File & Image
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -324,6 +332,7 @@ export default function UploadsPage() {
   const [isImported, setIsImported] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
 
   // Drag & Drop
   const [isDragging, setIsDragging] = useState(false);
@@ -347,9 +356,16 @@ export default function UploadsPage() {
   };
 
   const handleFileSelected = (file: File) => {
+    // Bloqueia se já está processando — evita triple-trigger
+    if (isRunningRef.current) {
+      console.warn("[OCR] Disparo ignorado: já existe uma leitura em andamento.");
+      return;
+    }
+
     setImageFile(file);
     setIsImported(false);
     setImportError(null);
+    setOcrError(null);
     setProcessedPreview(null);
     setShowProcessed(false);
 
@@ -364,7 +380,15 @@ export default function UploadsPage() {
 
   // ── Run OCR Pipeline
   const runPipeline = useCallback(async (source: File | Blob | string) => {
+    // Guarda síncrona com useRef — imune ao React Strict Mode double-invoke
+    if (isRunningRef.current) {
+      console.warn("[OCR] runPipeline ignorado: já em execução.");
+      return;
+    }
+    isRunningRef.current = true;
+
     setIsProcessing(true);
+    setOcrError(null);
     setProgressState({ phase: "preprocessing", progress: 5, label: "Iniciando..." });
     setPipelineResult(null);
     setRows([]);
@@ -374,27 +398,19 @@ export default function UploadsPage() {
         source,
         {
           upscaleFactor: 2,
-          binarize: false,   // ← false = melhor para cadernos manuscritos
+          binarize: false,
           psmMode: 6,
           exportPreview: true
         },
         (state) => setProgressState(state)
       );
 
-      console.log("[OCR Page] Pipeline result:", {
-        rows: result.rows.length,
-        confidence: result.overallConfidence,
-        rawText: result.rawText?.slice(0, 200),
-      });
-
       setPipelineResult(result);
 
       if (result.rows.length > 0) {
         setRows(result.rows);
       } else {
-        // Não há linhas válidas: deixa tabela vazia para o usuário corrigir
-        // (não usa getFallbackRows para não confundir com dados reais)
-        console.warn("[OCR Page] Nenhuma linha extraída. Texto bruto:", result.rawText);
+        console.warn("[OCR Page] Nenhuma linha extraída.");
         setRows([]);
       }
 
@@ -402,19 +418,26 @@ export default function UploadsPage() {
         setProcessedPreview(result.preprocessedImageUrl);
       }
       setProgressState({ phase: "done", progress: 100, label: "Concluído!" });
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("[OCR Page] Erro no pipeline:", err);
+      const message = err instanceof Error ? err.message : "Erro desconhecido.";
+      setOcrError(message);
       setProgressState({ phase: "error", progress: 0, label: "Erro no processamento" });
       setRows([]);
     } finally {
+      isRunningRef.current = false;
       setTimeout(() => setIsProcessing(false), 600);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Reprocess (melhorar leitura)
   const handleReprocess = async () => {
-    if (!imageFile && !imagePreview) return;
+    // Bloqueia reprocessamento se já há uma chamada em andamento
+    if (isRunningRef.current || !imageFile && !imagePreview) return;
+    isRunningRef.current = true;
     setIsReprocessing(true);
+    setOcrError(null);
     setProgressState({ phase: "preprocessing", progress: 5, label: "Reprocessando com parâmetros avançados..." });
 
     try {
@@ -434,7 +457,12 @@ export default function UploadsPage() {
       if (newResult.preprocessedImageUrl) {
         setProcessedPreview(newResult.preprocessedImageUrl);
       }
+    } catch (err: unknown) {
+      console.error("[OCR Page] Erro ao reprocessar:", err);
+      const message = err instanceof Error ? err.message : "Erro desconhecido.";
+      setOcrError(message);
     } finally {
+      isRunningRef.current = false;
       setIsReprocessing(false);
       setTimeout(
         () => setProgressState({ phase: "idle", progress: 0, label: "" }),
@@ -566,6 +594,7 @@ export default function UploadsPage() {
     setPipelineResult(null);
     setIsImported(false);
     setImportError(null);
+    setOcrError(null);
     setProgressState({ phase: "idle", progress: 0, label: "" });
     setShowProcessed(false);
   };
@@ -642,13 +671,90 @@ export default function UploadsPage() {
           </div>
         )}
 
-        {/* Error Banner */}
+        {/* Error Banner — Importação */}
         {importError && (
           <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-xl text-sm">
             <p className="font-semibold">Erro na importação</p>
             <p>{importError}</p>
           </div>
         )}
+
+        {/* Error Banner — OCR / Quota */}
+        {ocrError && rows.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-4 rounded-xl flex gap-3 items-start">
+            <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm">Falha na leitura OCR</p>
+              <p className="text-sm mt-0.5">{ocrError}</p>
+              {ocrError.includes("Limite") && (
+                <a
+                  href="https://aistudio.google.com/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 underline mt-2 hover:text-amber-900"
+                >
+                  Criar nova chave de API →
+                </a>
+              )}
+            </div>
+            <button
+              onClick={() => setOcrError(null)}
+              className="text-amber-400 hover:text-amber-700 text-lg leading-none shrink-0"
+              aria-label="Fechar"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {/* Fallback Card — OCR falhou e não temos registros anteriores */}
+        {ocrError && rows.length === 0 && (
+          <Card className="border-red-200 bg-red-50/5 shadow-sm max-w-xl mx-auto my-8">
+            <CardHeader className="flex flex-row items-center gap-3 pb-2 border-b border-slate-100">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <CardTitle className="text-base text-slate-900 font-bold">
+                  Não foi possível analisar a imagem.
+                </CardTitle>
+                <CardDescription className="text-slate-500 text-xs">
+                  Ocorreu um erro durante o processamento inteligente
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-5 pb-6">
+              <p className="text-sm text-slate-600 leading-relaxed bg-red-50/50 border border-red-100 p-3 rounded-lg font-medium">
+                {ocrError}
+              </p>
+            </CardContent>
+            <CardFooter className="flex gap-3 justify-end border-t border-slate-100 pt-4 bg-slate-50/30 rounded-b-xl">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleReset}
+                className="text-slate-600 hover:text-slate-900 border-slate-200 bg-white"
+              >
+                Escolher outra imagem
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const source = imageFile || imagePreview;
+                  if (source) {
+                    setOcrError(null);
+                    runPipeline(source);
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white gap-2 font-semibold animate-pulse"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Tentar novamente
+              </Button>
+            </CardFooter>
+          </Card>
+        )}
+
 
         {/* Upload Area — inicial */}
         {!imagePreview && !isProcessing && (
@@ -658,13 +764,13 @@ export default function UploadsPage() {
                 ? "border-blue-500 bg-blue-50/20 scale-[1.01]"
                 : "border-slate-300 hover:border-blue-400 bg-white hover:bg-blue-50/5"
                 }`}
-              onDragOver={handleDragOver}
+              onDragOver={isRunningRef.current ? undefined : handleDragOver}
               onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
+              onDrop={isRunningRef.current ? undefined : handleDrop}
             >
               <CardContent
                 className="flex flex-col items-center justify-center py-16 px-6 text-center space-y-5"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => !isRunningRef.current && fileInputRef.current?.click()}
               >
                 <input
                   type="file"

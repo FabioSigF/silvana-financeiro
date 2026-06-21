@@ -55,6 +55,8 @@ export type OCRPhase =
   | "preprocessing"
   | "ocr_loading"
   | "ocr_reading"
+  | "gemini_reading"
+  | "validating"
   | "parsing"
   | "done"
   | "error";
