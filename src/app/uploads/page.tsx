@@ -947,7 +947,7 @@ export default function UploadsPage() {
         {!isProcessing && imagePreview && rows.length > 0 && (
           <div className="grid gap-6 lg:grid-cols-12 items-start">
             {/* Left: Image Panel */}
-            <Card className="lg:col-span-5 border-slate-150 shadow-sm overflow-hidden sticky top-6">
+            <Card className="lg:col-span-5 border-slate-150 shadow-sm overflow-hidden lg:sticky lg:top-6 bg-white">
               <CardHeader className="flex flex-row items-center justify-between pb-3">
                 <CardTitle className="text-sm font-semibold">Imagem do Caderno</CardTitle>
                 <div className="flex items-center gap-1.5">
@@ -1080,7 +1080,7 @@ export default function UploadsPage() {
             </Card>
 
             {/* Right: Review Table */}
-            <Card className="lg:col-span-7 border-slate-150 shadow-sm">
+            <Card className="lg:col-span-7 border-slate-150 shadow-sm bg-white">
               <CardHeader>
                 <div className="flex items-start justify-between gap-4">
                   <div>
