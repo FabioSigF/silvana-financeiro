@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import MainLayout from "@/components/layout/MainLayout";
 import { uploadsService } from "@/services/uploads.service";
 import { movementsService } from "@/services/movements.service";
+import { useCategories } from "@/hooks/useCategories";
 import {
   runOCRPipeline,
   reprocessOCR,
@@ -17,6 +18,7 @@ import { GeminiError } from "@/lib/gemini/types";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -40,6 +42,21 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   UploadCloud,
   Camera,
   Trash2,
@@ -55,9 +72,8 @@ import {
   ShieldCheck,
   ShieldAlert,
   Info,
-  ArrowUpRight,
-  ArrowDownRight,
   FileImage,
+  Edit2,
 } from "lucide-react";
 
 // ============================================================
@@ -214,7 +230,6 @@ function OCRProgressCard({ state }: { state: OCRProgressState }) {
             const stepIndex = stepOrder.indexOf(step.phase);
             const isDone = currentIndex > stepIndex;
             const isActive = currentIndex === stepIndex;
-            const isPending = currentIndex < stepIndex;
             return (
               <React.Fragment key={step.phase}>
                 <div className="flex flex-col items-center">
@@ -268,8 +283,6 @@ export default function UploadsPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  // Trava síncrona para impedir múltiplos disparos simultâneos
-  // (useRef não causa re-render — é imediato, diferente de useState)
   const isRunningRef = useRef(false);
 
   // File & Image
@@ -279,8 +292,21 @@ export default function UploadsPage() {
   const [showProcessed, setShowProcessed] = useState(false);
 
   const { movements } = useMovements();
+  const { categories } = useCategories();
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+
+  // Checkboxes / Selection
+  const [selectedRows, setSelectedRows] = useState<number[]>([]);
+
+  // Mass Edit Modal State
+  const [isMassEditOpen, setIsMassEditOpen] = useState(false);
+  const [massCategory, setMassCategory] = useState("");
+  const [massType, setMassType] = useState<"entrada" | "saída" | "">("");
+  const [massDate, setMassDate] = useState("");
+  const [changeCategory, setChangeCategory] = useState(false);
+  const [changeType, setChangeType] = useState(false);
+  const [changeDate, setChangeDate] = useState(false);
 
   // Categoria Suggestions
   const dbCategories = React.useMemo(() => {
@@ -356,7 +382,6 @@ export default function UploadsPage() {
   };
 
   const handleFileSelected = (file: File) => {
-    // Bloqueia se já está processando — evita triple-trigger
     if (isRunningRef.current) {
       console.warn("[OCR] Disparo ignorado: já existe uma leitura em andamento.");
       return;
@@ -368,6 +393,7 @@ export default function UploadsPage() {
     setOcrError(null);
     setProcessedPreview(null);
     setShowProcessed(false);
+    setSelectedRows([]);
 
     const reader = new FileReader();
     reader.onloadend = () => {
@@ -380,7 +406,6 @@ export default function UploadsPage() {
 
   // ── Run OCR Pipeline
   const runPipeline = useCallback(async (source: File | Blob | string) => {
-    // Guarda síncrona com useRef — imune ao React Strict Mode double-invoke
     if (isRunningRef.current) {
       console.warn("[OCR] runPipeline ignorado: já em execução.");
       return;
@@ -392,6 +417,7 @@ export default function UploadsPage() {
     setProgressState({ phase: "preprocessing", progress: 5, label: "Iniciando..." });
     setPipelineResult(null);
     setRows([]);
+    setSelectedRows([]);
 
     try {
       const result = await runOCRPipeline(
@@ -433,11 +459,11 @@ export default function UploadsPage() {
 
   // ── Reprocess (melhorar leitura)
   const handleReprocess = async () => {
-    // Bloqueia reprocessamento se já há uma chamada em andamento
     if (isRunningRef.current || !imageFile && !imagePreview) return;
     isRunningRef.current = true;
     setIsReprocessing(true);
     setOcrError(null);
+    setSelectedRows([]);
     setProgressState({ phase: "preprocessing", progress: 5, label: "Reprocessando com parâmetros avançados..." });
 
     try {
@@ -480,6 +506,7 @@ export default function UploadsPage() {
     setProcessedPreview(null);
     setShowProcessed(false);
     setIsProcessing(true);
+    setSelectedRows([]);
     setProgressState({ phase: "preprocessing", progress: 10, label: "Simulando pipeline..." });
 
     const steps = [
@@ -512,7 +539,6 @@ export default function UploadsPage() {
     updated[index] = {
       ...updated[index],
       [field]: field === "amount" ? Number(value) : value,
-      // Quando o usuário edita, aumenta a confiança para indicar revisão manual
       confidence: field === "description" || field === "amount" ? Math.max(updated[index].confidence, 80) : updated[index].confidence,
       confidenceLevel: field === "description" || field === "amount" ? "high" : updated[index].confidenceLevel,
     };
@@ -536,6 +562,46 @@ export default function UploadsPage() {
 
   const handleRemoveRow = (index: number) => {
     setRows(rows.filter((_, i) => i !== index));
+    setSelectedRows((prev) => prev.filter((i) => i !== index).map((i) => (i > index ? i - 1 : i)));
+  };
+
+  // Checkboxes
+  const handleToggleSelectRow = (index: number) => {
+    setSelectedRows((prev) =>
+      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
+    );
+  };
+
+  const handleToggleSelectAll = () => {
+    if (selectedRows.length === rows.length) {
+      setSelectedRows([]);
+    } else {
+      setSelectedRows(rows.map((_, i) => i));
+    }
+  };
+
+  // Mass Edit Action
+  const handleApplyMassEdit = () => {
+    const updated = [...rows];
+    selectedRows.forEach((idx) => {
+      if (changeCategory && massCategory) {
+        updated[idx].category = massCategory;
+      }
+      if (changeType && massType) {
+        updated[idx].type = massType as "entrada" | "saída";
+      }
+      if (changeDate && massDate) {
+        updated[idx].date = massDate;
+      }
+      updated[idx].confidence = Math.max(updated[idx].confidence, 80);
+      updated[idx].confidenceLevel = "high";
+    });
+    setRows(updated);
+    setIsMassEditOpen(false);
+    setSelectedRows([]);
+    setChangeCategory(false);
+    setChangeType(false);
+    setChangeDate(false);
   };
 
   // ── Import
@@ -575,6 +641,7 @@ export default function UploadsPage() {
 
       setIsImported(true);
       setRows([]);
+      setSelectedRows([]);
       setImageFile(null);
       setImagePreview(null);
       setProcessedPreview(null);
@@ -591,6 +658,7 @@ export default function UploadsPage() {
     setImagePreview(null);
     setProcessedPreview(null);
     setRows([]);
+    setSelectedRows([]);
     setPipelineResult(null);
     setIsImported(false);
     setImportError(null);
@@ -627,6 +695,14 @@ export default function UploadsPage() {
 
   const highConfRows = rows.filter((r) => r.confidenceLevel === "high").length;
   const lowConfRows = rows.filter((r) => r.confidenceLevel === "low").length;
+
+  const getUniqueCategoryOptions = (currentRowCategory: string) => {
+    const activeCats = categories.filter(c => c.active).map(c => c.name);
+    if (currentRowCategory && !activeCats.includes(currentRowCategory)) {
+      return [...activeCats, currentRowCategory];
+    }
+    return activeCats;
+  };
 
   return (
     <MainLayout>
@@ -712,7 +788,7 @@ export default function UploadsPage() {
           <Card className="border-red-200 bg-red-50/5 shadow-sm max-w-xl mx-auto my-8">
             <CardHeader className="flex flex-row items-center gap-3 pb-2 border-b border-slate-100">
               <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5 text-red-600" />
+                <AlertTriangle className="w-5 h-5 text-red-650" />
               </div>
               <div>
                 <CardTitle className="text-base text-slate-900 font-bold">
@@ -754,7 +830,6 @@ export default function UploadsPage() {
             </CardFooter>
           </Card>
         )}
-
 
         {/* Upload Area — inicial */}
         {!imagePreview && !isProcessing && (
@@ -954,7 +1029,7 @@ export default function UploadsPage() {
                       </p>
                     </div>
                     <div className="bg-red-50 rounded-lg p-2.5 text-center">
-                      <p className="text-xs text-red-600">Precisa revisar</p>
+                      <p className="text-xs text-red-650">Precisa revisar</p>
                       <p className="text-sm font-bold text-red-700 mt-0.5">
                         {lowConfRows}
                       </p>
@@ -1013,7 +1088,7 @@ export default function UploadsPage() {
                     <CardDescription className="mt-0.5">
                       Confira, corrija e ajuste os valores antes de importar. Linhas com
                       confiança{" "}
-                      <span className="text-red-600 font-semibold">baixa</span>{" "}
+                      <span className="text-red-650 font-semibold">baixa</span>{" "}
                       precisam de revisão especial.
                     </CardDescription>
                   </div>
@@ -1027,13 +1102,43 @@ export default function UploadsPage() {
                 </div>
               </CardHeader>
 
+              {/* Mass Edit Trigger Panel */}
+              {selectedRows.length > 0 && (
+                <div className="bg-blue-50/70 border-y border-blue-100 px-4 py-2.5 flex items-center justify-between text-sm transition-all duration-200">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-blue-800 bg-blue-100 w-6 h-6 rounded-full flex items-center justify-center text-xs">
+                      {selectedRows.length}
+                    </span>
+                    <span className="text-blue-700 font-medium">itens selecionados</span>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setIsMassEditOpen(true)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 gap-1.5"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    Edição em Massa
+                  </Button>
+                </div>
+              )}
+
               <CardContent className="p-0 overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-slate-50 hover:bg-slate-50">
+                      {/* Checkbox Column */}
+                      <TableHead className="w-[40px] text-center">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                          checked={rows.length > 0 && selectedRows.length === rows.length}
+                          onChange={handleToggleSelectAll}
+                        />
+                      </TableHead>
                       <TableHead className="w-[120px] text-xs">Data</TableHead>
                       <TableHead className="text-xs">Descrição</TableHead>
-                      <TableHead className="w-[110px] text-xs">Categoria</TableHead>
+                      <TableHead className="w-[130px] text-xs">Categoria</TableHead>
                       <TableHead className="w-[90px] text-xs">Tipo</TableHead>
                       <TableHead className="w-[105px] text-right text-xs">Valor</TableHead>
                       <TableHead className="w-[80px] text-center text-xs">Conf.</TableHead>
@@ -1043,7 +1148,7 @@ export default function UploadsPage() {
                   <TableBody>
                     {rows.length === 0 && pipelineResult && (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-10 text-center">
+                        <TableCell colSpan={8} className="py-10 text-center">
                           <div className="space-y-3 max-w-sm mx-auto">
                             <AlertTriangle className="w-8 h-8 text-amber-400 mx-auto" />
                             <p className="text-sm font-semibold text-slate-700">
@@ -1083,6 +1188,16 @@ export default function UploadsPage() {
                         className={`hover:bg-slate-50/50 transition-colors cursor-default ${row.confidenceLevel === "low" ? "bg-red-50/20" : ""
                           } ${hoveredRowIndex === index ? "bg-blue-50/40" : ""}`}
                       >
+                        {/* Checkbox */}
+                        <TableCell className="p-1.5 text-center">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                            checked={selectedRows.includes(index)}
+                            onChange={() => handleToggleSelectRow(index)}
+                          />
+                        </TableCell>
+
                         {/* Data */}
                         <TableCell className="p-1.5">
                           <Input
@@ -1112,13 +1227,22 @@ export default function UploadsPage() {
 
                         {/* Categoria */}
                         <TableCell className="p-1.5">
-                          <div className="space-y-1 min-w-[110px]">
-                            <Input
-                              value={row.category}
-                              onChange={(e) => handleUpdateRow(index, "category", e.target.value)}
-                              placeholder="Categoria..."
-                              className="h-8 px-2 text-xs"
-                            />
+                          <div className="space-y-1 min-w-[120px]">
+                            <Select
+                              value={row.category || ""}
+                              onValueChange={(val) => handleUpdateRow(index, "category", val)}
+                            >
+                              <SelectTrigger className="h-8 text-xs bg-white">
+                                <SelectValue placeholder="Selecione..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {getUniqueCategoryOptions(row.category).map((catName) => (
+                                  <SelectItem key={catName} value={catName}>
+                                    {catName}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             <div className="flex flex-wrap gap-1">
                               {getCategorySuggestionsForRow(row).map((cat) => (
                                 <button
@@ -1198,7 +1322,7 @@ export default function UploadsPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleRemoveRow(index)}
-                            className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                            className="h-7 w-7 text-slate-400 hover:text-red-650 hover:bg-red-50"
                           >
                             <Trash2 className="w-3 h-3" />
                           </Button>
@@ -1223,7 +1347,7 @@ export default function UploadsPage() {
                   <Button
                     variant="ghost"
                     onClick={handleReset}
-                    className="w-full sm:w-auto text-slate-600"
+                    className="w-full sm:w-auto text-slate-605"
                   >
                     Descartar
                   </Button>
@@ -1249,6 +1373,113 @@ export default function UploadsPage() {
             </Card>
           </div>
         )}
+
+        {/* Modal: Edição em Massa */}
+        <Dialog open={isMassEditOpen} onOpenChange={setIsMassEditOpen}>
+          <DialogContent className="sm:max-w-[420px]">
+            <DialogHeader>
+              <DialogTitle>Edição em Massa</DialogTitle>
+              <DialogDescription>
+                Selecione quais campos deseja alterar de forma simultânea nos {selectedRows.length} itens selecionados.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-4">
+              {/* Categoria */}
+              <div className="space-y-2 border border-slate-100 p-3 rounded-lg bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <input
+                    id="changeCategory"
+                    type="checkbox"
+                    className="h-4 w-4 accent-blue-600"
+                    checked={changeCategory}
+                    onChange={(e) => setChangeCategory(e.target.checked)}
+                  />
+                  <Label htmlFor="changeCategory" className="text-sm font-semibold cursor-pointer select-none">
+                    Alterar Categoria
+                  </Label>
+                </div>
+                {changeCategory && (
+                  <Select
+                    value={massCategory}
+                    onValueChange={(val) => setMassCategory(val || "")}
+                  >
+                    <SelectTrigger className="w-full bg-white h-9 mt-1.5 text-xs">
+                      <SelectValue placeholder="Selecione a categoria..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categories.filter(c => c.active).map((c) => (
+                        <SelectItem key={c.id} value={c.name}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              {/* Tipo */}
+              <div className="space-y-2 border border-slate-100 p-3 rounded-lg bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <input
+                    id="changeType"
+                    type="checkbox"
+                    className="h-4 w-4 accent-blue-600"
+                    checked={changeType}
+                    onChange={(e) => setChangeType(e.target.checked)}
+                  />
+                  <Label htmlFor="changeType" className="text-sm font-semibold cursor-pointer select-none">
+                    Alterar Tipo (Entrada/Saída)
+                  </Label>
+                </div>
+                {changeType && (
+                  <select
+                    value={massType}
+                    onChange={(e) => setMassType(e.target.value as any)}
+                    className="flex h-9 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 mt-1.5"
+                  >
+                    <option value="">Selecione...</option>
+                    <option value="entrada">Entrada</option>
+                    <option value="saída">Saída</option>
+                  </select>
+                )}
+              </div>
+
+              {/* Data */}
+              <div className="space-y-2 border border-slate-100 p-3 rounded-lg bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <input
+                    id="changeDate"
+                    type="checkbox"
+                    className="h-4 w-4 accent-blue-600"
+                    checked={changeDate}
+                    onChange={(e) => setChangeDate(e.target.checked)}
+                  />
+                  <Label htmlFor="changeDate" className="text-sm font-semibold cursor-pointer select-none">
+                    Alterar Data
+                  </Label>
+                </div>
+                {changeDate && (
+                  <Input
+                    type="date"
+                    value={massDate}
+                    onChange={(e) => setMassDate(e.target.value)}
+                    className="h-9 mt-1.5 text-xs"
+                  />
+                )}
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsMassEditOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="button" onClick={handleApplyMassEdit} className="bg-blue-600 hover:bg-blue-700">
+                Aplicar Alterações
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </MainLayout>
   );

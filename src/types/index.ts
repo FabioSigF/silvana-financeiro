@@ -31,3 +31,24 @@ export interface UploadRecord {
   processing_status: UploadStatus;
   created_at: string;
 }
+
+export interface Category {
+  id: string;
+  user_id?: string | null;
+  name: string;
+  color?: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface RecurringAccount {
+  id: string;
+  user_id: string;
+  description: string;
+  amount: number;
+  category_id?: string | null;
+  day_of_month: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}

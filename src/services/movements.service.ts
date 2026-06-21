@@ -147,4 +147,68 @@ export const movementsService = {
       created_at: row.created_at,
     }));
   },
+
+  /**
+   * Busca movimentações paginadas e filtradas no Supabase.
+   */
+  async getPaginated(params: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    type?: string;
+    category?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<{ data: Movement[]; count: number }> {
+    const supabase = getSupabaseClient();
+    
+    let query = supabase
+      .from("movements")
+      .select("*", { count: "exact" });
+
+    // Aplica filtros se existirem
+    if (params.search) {
+      query = query.or(`description.ilike.%${params.search}%,category.ilike.%${params.search}%`);
+    }
+    if (params.type && params.type !== "todos") {
+      query = query.eq("type", params.type);
+    }
+    if (params.category && params.category !== "todos") {
+      query = query.eq("category", params.category);
+    }
+    if (params.startDate) {
+      query = query.gte("date", params.startDate);
+    }
+    if (params.endDate) {
+      query = query.lte("date", params.endDate);
+    }
+
+    // Ordenação decrescente por data e criação
+    query = query
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    // Calcula os índices da paginação no Supabase (inclusivo, 0-indexed)
+    const from = (params.page - 1) * params.pageSize;
+    const to = from + params.pageSize - 1;
+    query = query.range(from, to);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    const mapped: Movement[] = ((data ?? []) as any[]).map((row) => ({
+      id: row.id,
+      type: row.type as Movement["type"],
+      description: row.description,
+      amount: Number(row.amount),
+      date: row.date,
+      category: row.category,
+      created_at: row.created_at,
+    }));
+
+    return {
+      data: mapped,
+      count: count ?? 0,
+    };
+  },
 };

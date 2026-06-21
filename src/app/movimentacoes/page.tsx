@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import MainLayout from "@/components/layout/MainLayout";
 import { useMovements } from "@/hooks/useMovements";
+import { useCategories } from "@/hooks/useCategories";
 import { Movement } from "@/types";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -35,8 +36,8 @@ const movementSchema = z.object({
 type MovementFormData = z.infer<typeof movementSchema>;
 
 export default function MovimentacoesPage() {
-  const { movements, loading, create, update, remove } = useMovements();
-  const [filteredMovements, setFilteredMovements] = useState<Movement[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(10);
 
   // Filter States
   const [search, setSearch] = useState("");
@@ -44,6 +45,18 @@ export default function MovimentacoesPage() {
   const [filterCategory, setFilterCategory] = useState<string>("todos");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  const { movements, totalCount, loading, reload, create, update, remove } = useMovements({
+    page: currentPage,
+    pageSize,
+    search,
+    type: filterType,
+    category: filterCategory,
+    startDate,
+    endDate,
+  });
+
+  const { categories } = useCategories();
 
   // Dialog States
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -58,6 +71,8 @@ export default function MovimentacoesPage() {
     register,
     handleSubmit,
     reset,
+    setValue,
+    watch,
     formState: { errors },
   } = useForm<MovementFormData>({
     resolver: zodResolver(movementSchema) as any,
@@ -70,38 +85,25 @@ export default function MovimentacoesPage() {
     },
   });
 
-  // Apply filters
+  const watchCategory = watch("category");
+
+  // Reload dynamically when pagination or filters change
   useEffect(() => {
-    let result = [...movements];
+    reload({
+      page: currentPage,
+      pageSize,
+      search,
+      type: filterType,
+      category: filterCategory,
+      startDate,
+      endDate,
+    });
+  }, [currentPage, pageSize, search, filterType, filterCategory, startDate, endDate, reload]);
 
-    if (search) {
-      result = result.filter(
-        (m) =>
-          m.description.toLowerCase().includes(search.toLowerCase()) ||
-          m.category.toLowerCase().includes(search.toLowerCase())
-      );
-    }
-
-    if (filterType !== "todos") {
-      result = result.filter((m) => m.type === filterType);
-    }
-
-    if (filterCategory !== "todos") {
-      result = result.filter((m) => m.category === filterCategory);
-    }
-
-    if (startDate) {
-      result = result.filter((m) => m.date >= startDate);
-    }
-
-    if (endDate) {
-      result = result.filter((m) => m.date <= endDate);
-    }
-
-    setFilteredMovements(result);
-  }, [movements, search, filterType, filterCategory, startDate, endDate]);
-
-  const categories = Array.from(new Set(movements.map((m) => m.category)));
+  // Reset page to 1 when filters change to avoid empty pages
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filterType, filterCategory, startDate, endDate]);
 
   const handleOpenCreate = () => {
     setEditingMovement(null);
@@ -231,12 +233,12 @@ export default function MovimentacoesPage() {
                     <SelectValue placeholder="Selecione" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="todos">Todas</SelectItem>
-                    {categories.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
+                      <SelectItem value="todos">Todas</SelectItem>
+                      {categories.map((c) => (
+                        <SelectItem key={c.id} value={c.name}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -299,15 +301,25 @@ export default function MovimentacoesPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ) : filteredMovements.length === 0 ? (
+                ) : movements.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-32 text-center text-slate-450">
+                    <TableCell colSpan={6} className="h-32 text-center text-slate-400">
                       Nenhuma movimentação financeira cadastrada ou encontrada.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredMovements.map((m) => (
-                    <TableRow key={m.id} className="hover:bg-slate-50/50 transition-colors">
+                  movements.map((m) => (
+                    <TableRow 
+                      key={m.id} 
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest("button") || target.closest("input") || target.closest("a")) {
+                          return;
+                        }
+                        handleOpenEdit(m);
+                      }}
+                      className="hover:bg-slate-50/50 transition-colors cursor-pointer"
+                    >
                       <TableCell className="font-medium text-slate-600 text-sm whitespace-nowrap">
                         {m.date.split("-").reverse().join("/")}
                       </TableCell>
@@ -364,6 +376,61 @@ export default function MovimentacoesPage() {
               </TableBody>
             </Table>
           </div>
+          
+          {/* Server-Side Pagination Controls */}
+          {!loading && totalCount > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-t border-slate-150 text-sm text-slate-500 bg-white">
+              <div>
+                Mostrando {Math.min(totalCount, (currentPage - 1) * pageSize + 1)}–
+                {Math.min(totalCount, currentPage * pageSize)} de {totalCount} registros
+              </div>
+              <div className="flex items-center gap-1.5 font-semibold">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="h-8 w-8 p-0"
+                  type="button"
+                >
+                  &lt;&lt;
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="h-8 w-8 p-0"
+                  type="button"
+                >
+                  &lt;
+                </Button>
+                <span className="mx-2 text-slate-700 font-medium">
+                  Página {currentPage} de {Math.ceil(totalCount / pageSize)}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.min(Math.ceil(totalCount / pageSize), p + 1))}
+                  disabled={currentPage === Math.ceil(totalCount / pageSize)}
+                  className="h-8 w-8 p-0"
+                  type="button"
+                >
+                  &gt;
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(Math.ceil(totalCount / pageSize))}
+                  disabled={currentPage === Math.ceil(totalCount / pageSize)}
+                  className="h-8 w-8 p-0"
+                  type="button"
+                >
+                  &gt;&gt;
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
 
         {/* Modal: Form Criar/Editar */}
@@ -457,11 +524,21 @@ export default function MovimentacoesPage() {
                 {/* Category */}
                 <div className="space-y-1.5">
                   <Label htmlFor="category">Categoria</Label>
-                  <Input
-                    id="category"
-                    placeholder="Ex: Matéria Prima, Venda, Utilitários, Máquinas"
-                    {...register("category")}
-                  />
+                  <Select
+                    value={watchCategory || ""}
+                    onValueChange={(val) => setValue("category", val || "", { shouldValidate: true })}
+                  >
+                    <SelectTrigger id="category" className="h-10 bg-white">
+                      <SelectValue placeholder="Selecione uma categoria" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categories.filter(c => c.active).map((c) => (
+                        <SelectItem key={c.id} value={c.name}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   {errors.category && (
                     <p className="text-xs text-red-650 font-medium">{errors.category.message}</p>
                   )}
