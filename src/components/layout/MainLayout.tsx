@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -14,6 +14,7 @@ import {
   User,
   ChevronLeft,
   ChevronRight,
+  Smartphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -28,11 +29,34 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const { user, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  useEffect(() => {
+    // Registra o Service Worker
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker
+        .register("/sw.js")
+        .then((reg) => console.log("Service Worker registrado com sucesso:", reg.scope))
+        .catch((err) => console.error("Falha ao registrar o Service Worker:", err));
+    }
+
+    // Captura o evento de instalação
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      (window as any).deferredPrompt = e;
+      window.dispatchEvent(new CustomEvent("pwa-install-prompt-available"));
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    };
+  }, []);
+
   const menuItems = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Movimentações", href: "/movimentacoes", icon: ArrowLeftRight },
     { name: "Contas a Pagar", href: "/contas-a-pagar", icon: DollarSign },
     { name: "Uploads", href: "/uploads", icon: UploadCloud },
+    { name: "Instalar Aplicativo", href: "/instalar", icon: Smartphone },
     { name: "Configurações", href: "/configuracoes", icon: Settings },
   ];
 

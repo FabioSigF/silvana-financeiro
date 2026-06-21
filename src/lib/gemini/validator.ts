@@ -3,7 +3,7 @@ import { GeminiError, GeminiErrorType, RawFinancialEntry } from "./types";
 // ============================================================
 // 1. Validação de Imagem
 // ============================================================
-const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+const MAX_IMAGE_SIZE_BYTES = 30 * 1024 * 1024; // 30 MB
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
 

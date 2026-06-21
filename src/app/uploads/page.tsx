@@ -870,7 +870,7 @@ export default function UploadsPage() {
                       : "Arraste a foto ou toque para enviar"}
                   </p>
                   <p className="text-xs text-slate-500 mt-1.5">
-                    JPG, PNG, WEBP — até 15MB. O sistema aplica pré-processamento
+                    JPG, PNG, WEBP — até 30MB. O sistema aplica pré-processamento
                     automático para melhorar a leitura.
                   </p>
                 </div>
